@@ -4,8 +4,16 @@ Reasoning workflow toolkit: scaffold reasflow agents/skills/tools for **opencode
 
 ## 一句话安装
 
+**macOS / Linux**（需要 sh）：
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/sillyDaibo/reasflow-release/main/install.sh | sh
+```
+
+**Windows**（PowerShell，无需 bash）：
+
+```powershell
+irm https://raw.githubusercontent.com/sillyDaibo/reasflow-release/main/install.ps1 | iex
 ```
 
 然后：
@@ -25,12 +33,24 @@ reasflow init --target codex
 
 ## 安装选项
 
+macOS / Linux（`install.sh`）：
+
 | 环境变量 | 默认 | 说明 |
 |---|---|---|
 | `INSTALL_DIR` | `~/.local/bin` | 二进制安装目录 |
 
 ```bash
 INSTALL_DIR=/usr/local/bin curl -fsSL .../install.sh | sh
+```
+
+Windows（`install.ps1`）：
+
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `-InstallDir` | `$env:LOCALAPPDATA\Programs\reasflow` | 二进制安装目录 |
+
+```powershell
+& ([scriptblock]::Create((irm https://.../install.ps1)) -InstallDir "D:\tools\reasflow")
 ```
 
 ## 二进制是自包含的
