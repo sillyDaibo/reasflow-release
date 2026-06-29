@@ -52,12 +52,18 @@ $zip = Join-Path $tmp $asset
 Invoke-WebRequest -Uri $zipUrl -OutFile $zip -UseBasicParsing
 
 # ── sha256 校验
+# 注意：GitHub release asset 以 application/octet-stream 下发，
+# Invoke-WebRequest 的 .Content 会是 [byte[]] 而非字符串，故下到文件再读。
 try {
-    $sums = (Invoke-WebRequest -Uri "$base/sha256sums.txt" -UseBasicParsing).Content
-    $expected = ($sums -split "`n" |
-        Where-Object { $_ -match "$asset`$" } |
-        ForEach-Object { ($_ -split '\s+')[0].Trim() } |
-        Select-Object -First 1)
+    $sumsFile = Join-Path $tmp "sha256sums.txt"
+    Invoke-WebRequest -Uri "$base/sha256sums.txt" -OutFile $sumsFile -UseBasicParsing
+    $sums = Get-Content -Raw $sumsFile
+    $expected = $null
+    foreach ($line in ($sums -split "\r?\n")) {
+        $parts = $line -split '\s+'
+        # 形如 "<hash>  <asset>"，按空白拆，第二段精确等于 asset 名
+        if ($parts.Count -ge 2 -and $parts[1] -eq $asset) { $expected = $parts[0].Trim(); break }
+    }
     if ($expected) {
         $actual = (Get-FileHash -Path $zip -Algorithm SHA256).Hash.ToLower()
         if ($actual -ne $expected.ToLower()) {
