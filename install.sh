@@ -3,7 +3,8 @@
 # 用法（用户侧）：
 #   curl -fsSL https://raw.githubusercontent.com/<OWNER>/<REPO>/main/install.sh | sh
 #
-# 行为：探测平台/架构 → 查询 GitHub 最新 release → 下载对应 tarball
+# 行为：探测平台/架构 → 经 /releases/latest 重定向取最新 tag（不走 api.github.com，
+#       不受未授权 API 限流影响）→ 从 releases/download/<tag>/ 下载对应 tarball
 #       → 校验 sha256 → 解压到 ${INSTALL_DIR}（默认 ~/.local/bin）→ 提示 PATH。
 set -euo pipefail
 
@@ -13,7 +14,6 @@ RELEASE_REPO="${RELEASE_REPO:-sillyDaibo/reasflow-release}"
 
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 
-# 平台 → release asset 匹配
 uname_s="$(uname -s)"
 uname_m="$(uname -m)"
 case "${uname_s}-${uname_m}" in
@@ -25,43 +25,40 @@ case "${uname_s}-${uname_m}" in
     *) echo "✗ 不支持的平台：${uname_s}-${uname_m}" >&2; exit 1 ;;
 esac
 
+# tag → asset 文件名（由 tag 拼接，无需 API）
+ver_from_tag() {
+    # /releases/latest 302 → /releases/tag/<tag>，取 Location 头里的 tag
+    local loc
+    loc="$(curl -fsSI "https://github.com/${RELEASE_REPO}/releases/latest" | grep -i '^location:' | tr -d '\r' | awk '{print $2}')"
+    basename "${loc}"
+}
+
 echo "==> reasflow 安装器"
 echo "    平台: ${uname_s}/${uname_m}  → asset: *${asset_pattern}*"
 echo "    目标: ${INSTALL_DIR}"
 
-api="https://api.github.com/repos/${RELEASE_REPO}/releases/latest"
 echo "==> 查询最新 release：${RELEASE_REPO}"
-if ! release_json="$(curl -fsSL "$api")"; then
-    echo "✗ 无法获取 release 信息，检查 RELEASE_REPO=${RELEASE_REPO} 是否正确" >&2
-    exit 1
-fi
-
-tag="$(printf '%s' "$release_json" | grep -m1 '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')"
-[ -n "$tag" ] || { echo "✗ 解析 tag_name 失败" >&2; exit 1; }
+tag="$(ver_from_tag)"
+[ -n "$tag" ] || { echo "✗ 解析最新 tag 失败" >&2; exit 1; }
 echo "    最新版本: ${tag}"
 
-# 找匹配的 asset（取 browser_download_url）
-asset_url="$(printf '%s' "$release_json" \
-    | grep '"browser_download_url"' \
-    | grep -E "/[^/]*${asset_pattern}\.(tar\.gz|zip)\b" \
-    | head -1 \
-    | sed -E 's/.*"([^"]+)".*/\1/')"
-[ -n "$asset_url" ] || { echo "✗ release ${tag} 中没有匹配 *${asset_pattern} 的产物" >&2; exit 1; }
-echo "    下载: ${asset_url##*/}"
+base="https://github.com/${RELEASE_REPO}/releases/download/${tag}"
+asset_name="reasflow-${tag}-${asset_pattern}"
+case "$asset_pattern" in
+    x86_64-windows) asset_name="${asset_name}.zip" ;;
+    *)              asset_name="${asset_name}.tar.gz" ;;
+esac
+asset_url="${base}/${asset_name}"
+echo "    下载: ${asset_name}"
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-archive="$tmp/${asset_url##*/}"
+archive="$tmp/${asset_name}"
 curl -fsSL -o "$archive" "$asset_url"
 
-# 校验 sha256（若 release 带 sha256sums.txt 则下载并核对）
-sums_url="$(printf '%s' "$release_json" \
-    | grep '"browser_download_url"' \
-    | grep -E '/sha256sums\.txt"' \
-    | head -1 \
-    | sed -E 's/.*"([^"]+)".*/\1/')"
-if [ -n "$sums_url" ]; then
-    expected="$(curl -fsSL "$sums_url" | grep -E " ${asset_url##*/}\$" | awk '{print $1}')"
+# 校验 sha256（从同一 release 拉 sha256sums.txt）
+sums_url="${base}/sha256sums.txt"
+if expected="$(curl -fsSL "$sums_url" | grep -E " ${asset_name}\$" | awk '{print $1}')"; then
     if [ -n "$expected" ]; then
         actual="$(sha256sum "$archive" | awk '{print $1}')"
         if [ "$expected" != "$actual" ]; then
@@ -79,15 +76,12 @@ case "$archive" in
     *.zip)    command -v unzip >/dev/null || { echo "✗ 需要 unzip" >&2; exit 1; }; unzip -q "$archive" -d "$tmp" ;;
 esac
 
-# 找解压出来的二进制（可能在子目录）
-found="$(find "$tmp" -type f -name "$bin" -perm -u+x | head -1)"
-[ -n "$found" ] || found="$(find "$tmp" -type f -name "$bin" | head -1)"
+found="$(find "$tmp" -type f -name "$bin" | head -1)"
 [ -n "$found" ] || { echo "✗ 解压后未找到 ${bin}" >&2; exit 1; }
 
 install -m 0755 "$found" "${INSTALL_DIR}/${bin}"
 echo "==> 已安装：${INSTALL_DIR}/${bin}"
 
-# PATH 检查
 case ":${PATH}:" in
     *":${INSTALL_DIR}:"*) ;;
     *)
